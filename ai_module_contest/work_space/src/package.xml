@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="2">
+  <!-- EDIT: Package name, version description -->
+  <name>run_robot</name>
+  <version>0.0.0</version>
+  <description>The ros_python_pkg package</description>
+
+  <!-- EDIT: Maintainer and author's name and email -->
+  <maintainer email="email@domain.com">Persons_Name</maintainer>
+
+  <!-- EDIT: License -->
+  <license>TODO</license>
+
+  <!-- Required for all packages -->
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <!-- Required for all Python packages -->
+  <depend>rospy</depend>
+  <depend>std_msgs</depend>
+
+  <export>
+  </export>
+</package>
