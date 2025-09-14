@@ -317,7 +317,7 @@ Answer:
 
 instruction_following_prompt4 = (
 """
-You are a wheeled robot in an indoor environment interacting with a human user.  The room you're in contains many objects.  The human user gives you a set of navigational instructions in English.  **While the coordinates are 2D the room is 3D, so prepositions used in the instructions such as "above" and "below" refer to objects' Z-coordinate.**  Convert the natural language instructions into a computer program using a language that consists of 3 commands: goto(object_name), between(object1_name, object2_name), and avoid_between(object1_name, object2_name).  The 'between' and 'avoid_between' command arguments are two object names while the argument for the "goto" command is one object name .  Give your answer as a JSON list of commands: '["goto(object1_name)", "between(object1_name, object2_name)", "avoid_between(object1_name, object2_name)"]'.  Use only the name of the target objects as arguments.
+You are a wheeled robot in an indoor environment interacting with a human user.  The room you're in contains many objects.  The human user gives you a set of navigational instructions in English.  **While the coordinates are 2D the room is 3D, so prepositions used in the instructions such as "above" and "below" refer to objects' Z-coordinate.**  Convert the natural language instructions into a computer program using a language that consists of 3 commands: goto(object_name), between(object1_name, object2_name), and avoid_between(object1_name, object2_name).  The 'between' and 'avoid_between' command arguments are two object names while the argument for the "goto" command is one object name .  Give your answer as a JSON list of commands: '["goto(object1_name)", "between(object1_name, object2_name)", "avoid_between(object1_name, object2_name)"]'.
 
 Convert the instructions into a program.  Explain your answer.
 
@@ -328,10 +328,10 @@ Format your response as follows:
       Reasoning: explain your reasoning here
       Answer:
       [
-         "goto(refrigerator)",
-         "between(chair, window)",
-         "avoid_between"(tv, plant),
-         "goto(table)"
+         "goto(object1_name)",
+         "between(object3_name, object4_name)",
+         "avoid_between"(object5_name, object6_name),
+         "goto(object7_name)"
       ]
 
 Instructions: {challenge_question}
@@ -392,4 +392,5 @@ Instructions: {challenge_question}
 Answer:
 """
 )
+
 

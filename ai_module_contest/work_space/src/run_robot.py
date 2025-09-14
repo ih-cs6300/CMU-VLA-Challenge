@@ -27,6 +27,7 @@ from tsp_solver.greedy import solve_tsp
 from scipy.spatial import KDTree
 
 import torch
+from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 
 import geopandas as gpd
 from shapely.geometry import Point
@@ -34,6 +35,7 @@ from shapely.geometry import Point
 from path_utils import reduce_path, clean_path, smooth_path
 from process_question import question_processor_driver, get_qtype_objects
 from publish_answers import publish_waypoints, publish_numerical, publish_marker
+from object_detection import make_depth_map
 
 class RobotProcessor:
     """
@@ -69,19 +71,19 @@ class RobotProcessor:
             self._marker_callback
         )
         #rospy.loginfo("Subscribed to /object_markers topic...")
-        #self.sem_img_subscr = rospy.Subscriber(
-        #    '/camera/semantic_image',
-        #    #'/camera/image', 
-        #    Image, 
-        #    self._image_callback
-        #)
+
+        self.sem_img_subscr = rospy.Subscriber(
+            '/camera/image', 
+            Image, 
+            self._image_callback
+        )
         #rospy.loginfo("Subscribed to /camera/image topic...")
 
-        #self.reg_scan_subscr = rospy.Subscriber(
-        #    '/registered_scan',
-        #    PointCloud2,
-        #    self._regscan_callback
-        #)
+        self.reg_scan_subscr = rospy.Subscriber(
+            '/registered_scan',
+            PointCloud2,
+            self._regscan_callback
+        )
         #rospy.loginfo("Subscribed to /registered_scan topic...")
 
         self.question_subscr = rospy.Subscriber(
@@ -102,6 +104,7 @@ class RobotProcessor:
         self.linear_x = -99.
         self.linear_y = -99.
         self.linear_z = -99.
+        self.yaw = -99.
 
         self.point_matrix = None
 
@@ -109,8 +112,10 @@ class RobotProcessor:
         self.got_position = False
         self.got_traversable = False
         self.got_question = False
-        self.done_exploring = True # TODO False 
+        self.done_exploring =False 
         self.got_answer = False
+        self.got_image = False
+        self.got_lidar = False
 
         # robot state
         self.state = init_state                                                                         
@@ -124,11 +129,41 @@ class RobotProcessor:
 
         self.object_markers = {}
 
+        # image
         self.bridge = CvBridge()
+        self.image = None
+        self.image_time = None
+        self.image_depth = None
+        self.pt2img_dist_lut = None
+        
 
+        # lidar
+        self.lidar_cloud = None
+        self.lidar_time = None 
+
+        # geospatial database
         spatial_data = {"id":[], "object_name":[], "geometry":[], "scale":[], "orientation":[], "text_embedding":[]}
-        self.gdf = gpd.GeoDataFrame(spatial_data, geometry='geometry')
+        self.gdf = gpd.GeoDataFrame(spatial_data, geometry='geometry') 
+
+        # object detection
+        self.obj_detection_model = None
+        model_id = "IDEA-Research/grounding-dino-base"
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.obj_detection_processor = AutoProcessor.from_pretrained(model_id)
+        self.obj_detection_model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(self.device)
+
+        # depth map
+        self.lidar_x_stack = np.zeros(stack_num, dtype=np.float32)
+        self.lidar_y_stack = np.zeros(stack_num, dtype=np.float32)
+        self.lidar_z_stack = np.zeros(stack_num, dtype=np.float32)
+        self.lidar_roll_stack = np.zeros(stack_num, dtype=np.float32)
+        self.lidar_pitch_stack = np.zeros(stack_num, dtype=np.float32)
+        self.lidar_yaw_stack = np.zeros(stack_num, dtype=np.float32)
+        self.odom_time_stack = np.zeros(stack_num, dtype=np.float64)
+        self.odom_id_pointer = -1
+        self.image_id_pointer = 0
+        self.camera_offset_z = rospy.get_param("~cameraOffsetZ", 0.0)
+
 
     def _challenge_callback(self, msg):
         #rospy.loginfo("String Processor Node: Received Question: '%s'", msg.data) 
@@ -280,6 +315,7 @@ class RobotProcessor:
         # Convert quaternion to Euler angles (roll, pitch, yaw)
         # The output is in radians
         (roll, pitch, yaw) = tf.transformations.euler_from_quaternion(orientation_list)
+        self.yaw = yaw
 
         # Print the extracted pose information
         #rospy.loginfo("Position: X=%.2f m, Y=%.2f m", self.position_x, self.position_y)
@@ -294,6 +330,17 @@ class RobotProcessor:
         # set flags for state change
         if (self.got_position == False):
             self.got_position = True
+
+
+        # dor depth map
+        self.odom_id_pointer = (self.odom_id_pointer + 1) % self.stack_num
+        self.odom_time_stack[self.odom_id_pointer] = msg.header.stamp.to_sec()
+        self.lidar_x_stack[self.odom_id_pointer] = msg.pose.pose.position.x
+        self.lidar_y_stack[self.odom_id_pointer] = msg.pose.pose.position.y
+        self.lidar_z_stack[self.odom_id_pointer] = msg.pose.pose.position.z
+        self.lidar_roll_stack[self.odom_id_pointer] = roll
+        self.lidar_pitch_stack[self.odom_id_pointer] = pitch
+        self.lidar_yaw_stack[self.odom_id_pointer] = yaw
 
     def _marker_callback(self, msg):
         #rospy.loginfo("Received a MarkerArray message with %d markers.", len(msg.markers))
@@ -326,10 +373,10 @@ class RobotProcessor:
         try:
             # Convert ROS Image message to OpenCV image (NumPy array)
             # 'bgr8' is often used for color images, 'mono8' for grayscale
-            cv_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            self.image_time = msg.header.stamp.to_sec()
+            self.image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+            self.got_image = True
 
-            # Now cv_image is a NumPy array. You can perform operations on it.
-            # For example, print its shape and data type:
             #rospy.loginfo(f"Image converted to NumPy array. Shape: {cv_image.shape}, Data Type: {cv_image.dtype}")
 
 
@@ -337,9 +384,8 @@ class RobotProcessor:
             rospy.logerr(f"CvBridge Error: {e}")
 
         # Generate a unique filename using timestamp
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
         #filename = os.path.join(self.output_directory, f"image_{timestamp}_{self.image_count:04d}.png")
-        filename = "/home/ubuntu/CMU-VLA-Challenge/semantic_image1.png"
+        filename = "/home/ubuntu/CMU-VLA-Challenge/camera_image1.png"
 
         try:
             # Save the OpenCV image as a PNG file
@@ -350,11 +396,21 @@ class RobotProcessor:
 
 
     def _regscan_callback(self, msg):
-        point_matrix = self._convert_pointcloud2_to_numpy(msg)
-        if point_matrix.shape[0] > 0:
-            #rospy.loginfo("\nFirst 5 points (or fewer if less than 5):")
-            #rospy.loginfo(point_matrix[:min(5, point_matrix.shape[0])])
-            np.save('/home/ubuntu/CMU-VLA-Challenge/regscan_grid.npy', point_matrix)
+        self.lidar_time =msg.header.stamp.to_sec()
+        
+        points_list = []
+        for p in pc2.read_points(msg, field_names=("x", "y", "z"), skip_nans=True):
+            points_list.append(p)
+
+        self.lidar_cloud = np.array(points_list, dtype=np.float32)
+        self.got_lidar = True
+
+        image_depth, pt2img_lut = make_depth_map(self)
+        self.image_depth = image_depth
+        self.pt2img_dist_lut = pt2img_lut
+
+
+        #np.save('/home/ubuntu/CMU-VLA-Challenge/regscan_grid.npy', self.lidar_cloud)
 
     def save_gdf(self):
         self.gdf.to_pickle('gpandas_df.pkl')        
@@ -368,13 +424,15 @@ class RobotProcessor:
                 print(f"\nstate: {self.state_names[self.state]}")
                 self.old_state = self.state
 
-            if (self.got_position == True) and (self.got_traversable == True) and (self.got_question == True) and (self.statement_type != ""): 
+            if (self.got_position == True) and (self.got_traversable == True) and 
+            (self.got_question == True) and (self.statement_type != "") and 
+            (self.got_image == True) and (self.got_lidar == True) and (self.obj_detection_model is not None): 
                 self.state = 1
                 print(f"\nstate: {self.state_names[self.state]}")
                 if self.statement_type != 'instruction-following':
                     self._explore1()
                 else:
-                    self._explore1()
+                    self._explore2()
         elif (self.state == 1):
             # explore
             if (self.done_exploring == True) and (self.got_question == True): 
@@ -507,21 +565,9 @@ class RobotProcessor:
         counts, xedges, yedges = np.histogram2d(point_matrix[:, 0], point_matrix[:, 1], bins=( np.ceil((MAX_Y-MIN_Y)/0.25).astype(np.int64), np.ceil((MAX_X-MIN_X)/0.25).astype(np.int64) ))
         counts = np.where(counts > 10., 0., 1.)
 
-        # go in square
-        p1 = pos + np.array([1.2, 0.])
-        p2 = p1 + np.array([-1.2, 0.])
+        
 
-        dist1, idx1 = kdtree.query(p1)
-        dist2, idx2 = kdtree.query(p2)
-
-        p1 = point_matrix[idx1, :2]
-        p2 = point_matrix[idx2, :2]
-
-        path_ordered = np.array([p1, p2])
-        print(path_ordered)
-        publish_waypoints(self, path_ordered, self.waypoint_pub, threshold=0.1)
-
-        self.done_exploring = False
+        self.done_exploring = True
 
 
 def create_shutdown_hook(process_obj):
