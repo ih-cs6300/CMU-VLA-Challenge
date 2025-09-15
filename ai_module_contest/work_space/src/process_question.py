@@ -6,12 +6,14 @@ from shapely.geometry import Point, Polygon
 import json
 import cv2
 import re
+import copy
 
 from prompts import numerical_prompt, object_extraction_prompt, object_reference_prompt, instruction_following_prompt2, get_goal_position_prompt, instruction_following_prompt4
 from prompts import cross_reference_prompt, cross_ref_coords_prompt
 from gemini_stuff import ask_gemini
-from path_utils import world2grid, grid2world, find_nearest_free, bresenham_line, reduce_path
+from path_utils import world2grid, grid2world, find_nearest_free, bresenham_line, reduce_path, clean_path, smooth_path
 from object_detection import apply_dino, pixel2direction
+from publish_answers import publish_waypoints
 
 from astar.search import AStar
 from scipy.spatial import KDTree
@@ -77,10 +79,16 @@ def get_instr(instruction,  use_obj_coords=True):
         idx += 1
         match = re.search(regex_list[idx], instruction)
 
-    if (idx == 0) or (idx == 2):
-        instr_args = (float(match.group(1)), float(match.group(2)))
-    elif (idx == 1) or (idx == 3):
-        instr_args = [(float(match.group(1)), float(match.group(2))), (float(match.group(3)), float(match.group(4)))]
+    if (use_obj_coords == True):
+        if (idx == 0) or (idx == 2):
+            instr_args = (float(match.group(1)), float(match.group(2)))
+        elif (idx == 1) or (idx == 3):
+            instr_args = [(float(match.group(1)), float(match.group(2))), (float(match.group(3)), float(match.group(4)))]
+    else:
+       if (idx == 0) or (idx == 2):
+           instr_args = match.group(1)
+       elif (idx == 1) or (idx == 3):
+           instr_args = [match.group(1), match.group(2)]
 
     return instr_names[idx], instr_args
 
@@ -98,19 +106,23 @@ def cross_reference(gdf, challenge_question):
     print(f"\n\nanswer: {ans}\n\n")
     return ans
 
-def process_obj_detection_res(obj_det_res, image_ht, image_wd):
+def process_obj_detection_res(image_depth, yaw, obj_det_res, image_ht, image_wd):
     bboxes = obj_det_res[0]['boxes']
     labels = obj_det_res[0]['labels']
+    scores = obj_det_res[0]['scores']
+
+    idx = torch.argmax(scores).item()
                                                                                                                   
     # get first bbox center
-    bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax = bboxes[0].astype(np.uint16)
-    bbox_center = ((bbox_min+bbox_xmax)/2, (bbox_ymin, bbox_ymax)/2)
+    bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax = torch.round(bboxes[idx]).to(torch.int64)
+    bbox_center = ((bbox_xmin+bbox_xmax)/2, (bbox_ymin+bbox_ymax)/2) 
+    bbox_center = (bbox_center[0].item(), bbox_center[1].item())
                                                                                                                   
     # get objects distance from robot                         
     obj_depth = np.nanmean(image_depth[bbox_ymin:bbox_ymax, bbox_xmin:bbox_xmax])
                                                                                                                   
     # get objects direction       
-    theta_pix = pixel2direction(bbox_center, image_wd)   # 0 rads is at image left and 2pi rads is at image right
+    theta_pix = pixel2direction(bbox_center[0], image_wd)   # 0 rads is at image left and 2pi rads is at image right
     theta_world = yaw + (np.pi - theta_pix)
     x_world = obj_depth * np.cos(theta_world)
     y_world = obj_depth * np.sin(theta_world)
@@ -137,6 +149,7 @@ def follow_instructions(
         obj_detection_model, 
         obj_detection_processor,
         yaw,
+        way_pub,
         statement_type='instruction-following'
     ):
 
@@ -144,6 +157,7 @@ def follow_instructions(
     pprint_curr_loc = f"({curr_position[0]:.1f}, {curr_position[1]:.1f})"
     pprint_room_limits = f"(({MIN_X:.1f}, {MIN_Y:.1f}), ({MAX_X:.1f}, {MAX_Y:.1f}))"
     filled_prompt = instruction_following_prompt4.format(challenge_question=challenge_question)
+    n_pts = -1 # num of smoothed pts
 
     #ans, response_str = ask_openai(filled_prompt, 'target-coordinates')
     ans, response_str = ask_gemini(filled_prompt, None, statement_type)
@@ -177,14 +191,14 @@ def follow_instructions(
         instr_name, instr_args = get_instr(curr_instr, use_obj_coords=False)
 
         if (instr_name == "goto") or (instr_name == 'stop_at'):
-            import pdb; pdb.set_trace()
             # get start grid idx
             start = world2grid(xedges, yedges, pos)
 
             # locate objects in image
             image_text = instr_args.replace("_", " ") + "."
-            obj_det_res = apply_dino((self, image, image_text, obj_detection_model, obj_detection_processor, text_thresh=0.2, box_thresh=0.2)
-            arg_coords = process_obj_detection_res(obj_det_res, image_ht, image_wd)    
+            obj_det_res = apply_dino(self, image, image_text, obj_detection_model, obj_detection_processor, text_thresh=0.2, box_thresh=0.2)
+            image_ht, image_wd, _ = image.shape
+            arg_coords = process_obj_detection_res(image_depth, yaw, obj_det_res, image_ht, image_wd)    
 
             # get goal grid idx; make sure goal is traversable
             dist, pt_idx = kdtree.query(arg_coords)
@@ -197,15 +211,34 @@ def follow_instructions(
             # get path with A-star
             path = AStar(counts.astype(np.int8).tolist()).search(start, goal)
             path = [] if path is None else path
-            complete_path += path
-            pos = grid2world(xedges, yedges, path[-1])
+            path_world_g = grid2world(xedges, yedges, path)
+            red_path_g = clean_path(path_world_g, kdtree, point_matrix, xedges, yedges, counts)
+            #red_path_g = smooth_path(red_path_g, n_pts, s_var=12)  # causes errors sometimes
+            red_path_g = reduce_path(red_path_g)
+            complete_path += red_path_g
+
+            # move to new location
+            publish_waypoints(self, red_path_g, way_pub)
+
+            pos = red_path_g[-1]
         elif (instr_name == "between"):
             # get start idx
             start = world2grid(xedges, yedges, pos)
 
+            # locate objects in image
+            image_text1 = instr_args[0].replace("_", " ") + "."
+            image_text2 = instr_args[1].replace("_", " ") + "."
+            obj_det_res1 = apply_dino(self, image, image_text1, obj_detection_model, obj_detection_processor, text_thresh=0.2, box_thresh=0.2)
+            obj_det_res2 = apply_dino(self, image, image_text2, obj_detection_model, obj_detection_processor, text_thresh=0.2, box_thresh=0.2)
+            image_ht, image_wd, _ = image.shape
+            arg_coords1 = process_obj_detection_res(image_depth, yaw, obj_det_res1, image_ht, image_wd)
+            arg_coords2 = process_obj_detection_res(image_depth, yaw, obj_det_res2, image_ht, image_wd)
+
+
             # goal is mid-point of args
-            args_arr = np.array(instr_args)
+            args_arr = np.array([arg_coords1, arg_coords2])
             p1 = np.mean(args_arr, axis=0)
+
             dist, pt_idx = kdtree.query(p1)
             goal = world2grid(xedges, yedges, point_matrix[pt_idx, :2])
 
@@ -215,12 +248,30 @@ def follow_instructions(
 
             path = AStar(counts.astype(np.int8).tolist()).search(start, goal)
             path = [] if path is None else path
-            complete_path += path
-            pos = grid2world(xedges, yedges, path[-1])
+            path_world_b = grid2world(xedges, yedges, path)
+            red_path_b = clean_path(path_world_b, kdtree, point_matrix, xedges, yedges, counts)
+            #red_path_b = smooth_path(red_path_b, n_pts, s_var=4)   # causes errors sometimes
+            red_path_b = reduce_path(red_path_b)
+            complete_path += red_path_b
+
+            # move to new location
+            publish_waypoints(self, red_path_b, way_pub)
+
+            pos = red_path_b[-1]
         elif (instr_name == "avoid_between"):
             # add obstacles to counts
-            avoid1 = world2grid(xedges, yedges, instr_args[0])
-            avoid2 = world2grid(xedges, yedges, instr_args[1])
+
+            # locate objects in image                                                                                                           
+            image_text1 = instr_args[0].replace("_", " ") + "."
+            image_text2 = instr_args[1].replace("_", " ") + "."
+            obj_det_res1 = apply_dino(self, image, image_text1, obj_detection_model, obj_detection_processor, text_thresh=0.2, box_thresh=0.2)
+            obj_det_res2 = apply_dino(self, image, image_text2, obj_detection_model, obj_detection_processor, text_thresh=0.2, box_thresh=0.2)
+            image_ht, image_wd, _ = image.shape
+            arg_coords1 = process_obj_detection_res(image_depth, yaw, obj_det_res1, image_ht, image_wd)
+            arg_coords2 = process_obj_detection_res(image_depth, yaw, obj_det_res2, image_ht, image_wd)
+                                                                                                                                               
+            avoid1 = world2grid(xedges, yedges, arg_coords1)
+            avoid2 = world2grid(xedges, yedges, arg_coords2)
             squares2set = bresenham_line(avoid1[0], avoid1[1], avoid2[0], avoid2[1])
             for sqr in squares2set:
                 counts[sqr[0], sqr[1]] = 1
@@ -228,11 +279,7 @@ def follow_instructions(
             raise ExceptionType("bad instruction name!")
         idx += 1
 
-    complete_world_path = grid2world(xedges, yedges, complete_path) 
-
-    processed_path = reduce_path(complete_world_path)
-
-    return processed_path
+    return complete_path
 
 def get_qtype_objects(self, challenge_question):
     # get objects of interest from challenge_question
@@ -262,11 +309,16 @@ def question_processor_driver(self):
     statement_type = self.statement_type
     obj_list = self.question_objects
 
-    for stuff in obj_list:
-        if ('round' in obj_dict['objects'][stuff]['physical-characteristics']) and (stuff == 'table'):
-            obj_list.remove('table')
-            obj_list.append('round table')
-            break
+    obj_list_copy = copy.deepcopy(obj_list)
+    try:
+        for stuff in obj_list_copy:
+            if ('round' in obj_dict['objects'][stuff]['physical-characteristics']) and (stuff == 'table'):
+                obj_list.remove('table')
+                obj_list.append('round table')
+                break
+    except Exception as e:
+        print(f"An error occurred: {e}")  # TODO sometimes an error here; fix
+
 
     cross_referenced_obj_list = cross_reference(gdf, self.challenge_question)
     # create bounding box
@@ -302,8 +354,9 @@ def question_processor_driver(self):
        self.answer = gdf.iloc[row_num, gdf.columns.tolist().index('center')]
     elif (statement_type == 'instruction-following'):
        route = follow_instructions(self, obj_dict, object_coord_list, object_coord_center_list, START_POSITION, point_matrix, gdf, MIN_X, MAX_X, MIN_Y, MAX_Y, challenge_question, 
-                                   self.image, self.image_depth, self.pt2img_dist_lut, self.obj_detection_model, self.obj_detection_processor, self.yaw)
+                                   self.image, self.image_depth, self.pt2img_dist_lut, self.obj_detection_model, self.obj_detection_processor, self.yaw, self.waypoint_pub)
        self.answer = route
+       self.done_exploring = True
 
     self.got_answer = True
 

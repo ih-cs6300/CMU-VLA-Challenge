@@ -18,6 +18,7 @@ from std_msgs.msg import String
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Image
 from visualization_msgs.msg import MarkerArray, Marker
+import sensor_msgs.point_cloud2 as pc2
 
 from cv_bridge import CvBridge, CvBridgeError
 import cv2
@@ -25,6 +26,7 @@ import cv2
 from scipy import ndimage
 from tsp_solver.greedy import solve_tsp
 from scipy.spatial import KDTree
+
 
 import torch
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
@@ -44,53 +46,7 @@ class RobotProcessor:
     def __init__(self, init_state=0):
         """
         Initializes the RobotProcessor node, setting up the subscriber.
-        """
-        rospy.init_node('robo_processor_node', anonymous=True)
-        #rospy.loginfo("RobotProcessor node initialized.")
-
-        # Subscribe to the 'traversable_area' topic
-        self.trav_subscr = rospy.Subscriber(
-
-           '/traversable_area',
-           #'/my_semantic_scan',
-            PointCloud2,
-            self._pointcloud_callback
-        )
-        #rospy.loginfo("Subscribed to topic: /traversable_area of type sensor_msgs/PointCloud2")
-
-        self.odom_subscr = rospy.Subscriber(
-            '/state_estimation',
-            Odometry, 
-            self._odometry_callback
-        )
-        #rospy.loginfo("Subscribed to /state_estimation topic...")
-        
-        self.marker_subscr = rospy.Subscriber(
-            '/object_markers',
-            MarkerArray, 
-            self._marker_callback
-        )
-        #rospy.loginfo("Subscribed to /object_markers topic...")
-
-        self.sem_img_subscr = rospy.Subscriber(
-            '/camera/image', 
-            Image, 
-            self._image_callback
-        )
-        #rospy.loginfo("Subscribed to /camera/image topic...")
-
-        self.reg_scan_subscr = rospy.Subscriber(
-            '/registered_scan',
-            PointCloud2,
-            self._regscan_callback
-        )
-        #rospy.loginfo("Subscribed to /registered_scan topic...")
-
-        self.question_subscr = rospy.Subscriber(
-            '/challenge_question',
-            String,
-            self._challenge_callback
-        )
+        """ 
 
         self.waypoint_pub = rospy.Publisher('/way_point_with_heading', Pose2D, queue_size=1000)
         self.numerical_pub = rospy.Publisher('/numerical_response', Int32, queue_size=10)
@@ -145,6 +101,20 @@ class RobotProcessor:
         spatial_data = {"id":[], "object_name":[], "geometry":[], "scale":[], "orientation":[], "text_embedding":[]}
         self.gdf = gpd.GeoDataFrame(spatial_data, geometry='geometry') 
 
+        # depth map
+        self.stack_num = 400
+        self.lidar_x_stack = np.zeros(self.stack_num, dtype=np.float32)
+        self.lidar_y_stack = np.zeros(self.stack_num, dtype=np.float32)
+        self.lidar_z_stack = np.zeros(self.stack_num, dtype=np.float32)
+        self.lidar_roll_stack = np.zeros(self.stack_num, dtype=np.float32)
+        self.lidar_pitch_stack = np.zeros(self.stack_num, dtype=np.float32)
+        self.lidar_yaw_stack = np.zeros(self.stack_num, dtype=np.float32)
+        self.odom_time_stack = np.zeros(self.stack_num, dtype=np.float64)
+        self.odom_id_pointer = -1
+        self.image_id_pointer = 0
+        self.camera_offset_z = rospy.get_param("~cameraOffsetZ", 0.0)
+
+
         # object detection
         self.obj_detection_model = None
         model_id = "IDEA-Research/grounding-dino-base"
@@ -152,17 +122,52 @@ class RobotProcessor:
         self.obj_detection_processor = AutoProcessor.from_pretrained(model_id)
         self.obj_detection_model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(self.device)
 
-        # depth map
-        self.lidar_x_stack = np.zeros(stack_num, dtype=np.float32)
-        self.lidar_y_stack = np.zeros(stack_num, dtype=np.float32)
-        self.lidar_z_stack = np.zeros(stack_num, dtype=np.float32)
-        self.lidar_roll_stack = np.zeros(stack_num, dtype=np.float32)
-        self.lidar_pitch_stack = np.zeros(stack_num, dtype=np.float32)
-        self.lidar_yaw_stack = np.zeros(stack_num, dtype=np.float32)
-        self.odom_time_stack = np.zeros(stack_num, dtype=np.float64)
-        self.odom_id_pointer = -1
-        self.image_id_pointer = 0
-        self.camera_offset_z = rospy.get_param("~cameraOffsetZ", 0.0)
+        rospy.init_node('robo_processor_node', anonymous=True)
+        #rospy.loginfo("RobotProcessor node initialized.")
+                                                                                                
+        # Subscribe to the 'traversable_area' topic
+        self.trav_subscr = rospy.Subscriber(
+                                                                                                
+          '/traversable_area',
+          #'/my_semantic_scan',
+           PointCloud2,
+           self._pointcloud_callback
+        )
+        #rospy.loginfo("Subscribed to topic: /traversable_area of type sensor_msgs/PointCloud2")
+                                                                                                
+        self.odom_subscr = rospy.Subscriber(
+            '/state_estimation',
+            Odometry, 
+            self._odometry_callback
+        )
+        #rospy.loginfo("Subscribed to /state_estimation topic...")
+       
+        self.marker_subscr = rospy.Subscriber(
+            '/object_markers',
+            MarkerArray, 
+            self._marker_callback
+        )
+        #rospy.loginfo("Subscribed to /object_markers topic...")
+                                                                                                
+        self.sem_img_subscr = rospy.Subscriber(
+            '/camera/image', 
+            Image, 
+            self._image_callback
+        )
+        #rospy.loginfo("Subscribed to /camera/image topic...")
+                                                                                                
+        self.reg_scan_subscr = rospy.Subscriber(
+            '/registered_scan',
+            PointCloud2,
+            self._regscan_callback
+        )
+        #rospy.loginfo("Subscribed to /registered_scan topic...")
+                                                                                                
+        self.question_subscr = rospy.Subscriber(
+            '/challenge_question',
+            String,
+            self._challenge_callback
+        )
 
 
     def _challenge_callback(self, msg):
@@ -389,7 +394,7 @@ class RobotProcessor:
 
         try:
             # Save the OpenCV image as a PNG file
-            cv2.imwrite(filename, cv_image)
+            cv2.imwrite(filename, self.image)
             #rospy.loginfo(f"Saved image: {filename}")
         except Exception as e:
             rospy.logerr(f"Error saving image {filename}: {e}")
@@ -405,9 +410,10 @@ class RobotProcessor:
         self.lidar_cloud = np.array(points_list, dtype=np.float32)
         self.got_lidar = True
 
-        image_depth, pt2img_lut = make_depth_map(self)
-        self.image_depth = image_depth
-        self.pt2img_dist_lut = pt2img_lut
+        if (self.got_image == True):
+            image_depth, pt2img_lut = make_depth_map(self)
+            self.image_depth = image_depth
+            self.pt2img_dist_lut = pt2img_lut
 
 
         #np.save('/home/ubuntu/CMU-VLA-Challenge/regscan_grid.npy', self.lidar_cloud)
@@ -424,15 +430,16 @@ class RobotProcessor:
                 print(f"\nstate: {self.state_names[self.state]}")
                 self.old_state = self.state
 
-            if (self.got_position == True) and (self.got_traversable == True) and 
-            (self.got_question == True) and (self.statement_type != "") and 
-            (self.got_image == True) and (self.got_lidar == True) and (self.obj_detection_model is not None): 
+            if ((self.got_position == True) and (self.got_traversable == True) and (self.got_question == True) and (self.statement_type != "") and 
+                (self.got_image == True) and (self.got_lidar == True) and (self.obj_detection_model is not None)): 
                 self.state = 1
                 print(f"\nstate: {self.state_names[self.state]}")
                 if self.statement_type != 'instruction-following':
                     self._explore1()
                 else:
-                    self._explore2()
+                    #self._explore2()
+                    self._process_question()  # no exploration
+                    self.state = 2  # skip process question
         elif (self.state == 1):
             # explore
             if (self.done_exploring == True) and (self.got_question == True): 

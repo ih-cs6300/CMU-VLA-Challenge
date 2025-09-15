@@ -1,7 +1,9 @@
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import cv2
 import pandas as pd
+import numpy as np
+import math
 
 def draw_bounding_boxes(image_obj, bounding_boxes, output_path=None, labels=None):
     """
@@ -72,10 +74,10 @@ def apply_dino(self, image, text, model, processor, text_thresh=0.2, box_thresh=
 
 
     # bgr -> rgb
-    rgb_image = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB)
+    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(rgb_image)
 
-    inputs = processor(images=pil_image, text=text, return_tensors="pt").to(device)
+    inputs = processor(images=pil_image, text=text, return_tensors="pt").to(self.device)
     with torch.no_grad():
         outputs = model(**inputs)
 
@@ -84,15 +86,19 @@ def apply_dino(self, image, text, model, processor, text_thresh=0.2, box_thresh=
         inputs.input_ids,
         box_threshold=box_thresh,
         text_threshold=text_thresh,
-        target_sizes=[image.size[::-1]]
+        target_sizes=[pil_image.size[::-1]]
     )
     image_with_boxes = draw_bounding_boxes(pil_image, results[0]['boxes'], output_path="output_image_with_boxes.png", labels=results[0]['labels']) 
+    fname = text.replace(" ", "_").replace(".", "")
+    image_with_boxes.save("detected_"+fname+".jpg", quality=90) 
     return results
 
 
 def make_depth_map(self):
     laser_cloud_xyz = self.lidar_cloud
     skip_conversion = False
+    camera_offset_z = self.camera_offset_z
+    PI = np.pi
 
     image_height, image_width, _ = self.image.shape
     image_depth = np.zeros((image_height, image_width), dtype=np.float32)
@@ -106,7 +112,7 @@ def make_depth_map(self):
 
     if (self.odom_id_pointer > 0) and (len(laser_cloud_xyz) != 0):
         # Synchronize odometry and image
-        while (self.odom_time_stack[image_id_pointer] < self.image_time - 0.001 and self.image_id_pointer != (self.odom_id_pointer + 1) % self.stack_num):
+        while (self.odom_time_stack[self.image_id_pointer] < self.image_time - 0.001 and self.image_id_pointer != (self.odom_id_pointer + 1) % self.stack_num):
             self.image_id_pointer = (self.image_id_pointer + 1) % self.stack_num
 
         if abs(self.odom_time_stack[self.image_id_pointer] - self.image_time) > 10:  #0.001:
