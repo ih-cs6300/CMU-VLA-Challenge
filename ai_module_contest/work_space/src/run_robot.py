@@ -102,6 +102,7 @@ class RobotProcessor:
         self.linear_x = -99.
         self.linear_y = -99.
         self.linear_z = -99.
+        self.user = os.getenv('USER')
 
         self.point_matrix = None
 
@@ -165,7 +166,7 @@ class RobotProcessor:
             if point_matrix.shape[0] > 0:
                 #rospy.loginfo("\nFirst 5 points (or fewer if less than 5):")
                 #rospy.loginfo(point_matrix[:min(5, point_matrix.shape[0])])
-                np.save('/home/ubuntu/CMU-VLA-Challenge/occ_grid99.npy', point_matrix)
+                #np.save(f'/home/{self.user}/CMU-VLA-Challenge/occ_grid99.npy', point_matrix)
 
                 # store point matrix
                 self.point_matrix = point_matrix
@@ -339,11 +340,12 @@ class RobotProcessor:
         # Generate a unique filename using timestamp
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         #filename = os.path.join(self.output_directory, f"image_{timestamp}_{self.image_count:04d}.png")
-        filename = "/home/ubuntu/CMU-VLA-Challenge/semantic_image1.png"
+        filename = f"/home/{self.user}/CMU-VLA-Challenge/semantic_image1.png"
 
         try:
             # Save the OpenCV image as a PNG file
-            cv2.imwrite(filename, cv_image)
+            #cv2.imwrite(filename, cv_image)
+            pass
             #rospy.loginfo(f"Saved image: {filename}")
         except Exception as e:
             rospy.logerr(f"Error saving image {filename}: {e}")
@@ -354,7 +356,8 @@ class RobotProcessor:
         if point_matrix.shape[0] > 0:
             #rospy.loginfo("\nFirst 5 points (or fewer if less than 5):")
             #rospy.loginfo(point_matrix[:min(5, point_matrix.shape[0])])
-            np.save('/home/ubuntu/CMU-VLA-Challenge/regscan_grid.npy', point_matrix)
+            #np.save(f'/home/{self.user}/CMU-VLA-Challenge/regscan_grid.npy', point_matrix)
+            pass
 
     def save_gdf(self):
         self.gdf.to_pickle('gpandas_df.pkl')        
