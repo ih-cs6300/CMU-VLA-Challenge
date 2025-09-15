@@ -464,7 +464,6 @@ class RobotProcessor:
                 print(f"\nstate: {self.state_names[self.state]}")
             elif (self.statement_type == 'instruction-following'):
                 print(f"answer: {self.answer}")
-                publish_waypoints(self, np.array(self.answer), self.waypoint_pub)
                 self.state = 4
                 print(f"\nstate: {self.state_names[self.state]}") 
             else:
