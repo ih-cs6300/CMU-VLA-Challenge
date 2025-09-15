@@ -57,9 +57,9 @@ def draw_bounding_boxes(image_obj, bounding_boxes, output_path=None, labels=None
 
                 draw.text((text_x, text_y), label_text, fill="red", font=font)
 
-        if output_path:
-            image_obj.save(output_path)
-            print(f"Image with bounding boxes saved to: {output_path}")
+        #if output_path:
+        #    image_obj.save(output_path)
+        #    print(f"Image with bounding boxes saved to: {output_path}")
 
         return image_obj
     except Exception as e:
@@ -90,7 +90,7 @@ def apply_dino(self, image, text, model, processor, text_thresh=0.2, box_thresh=
     )
     image_with_boxes = draw_bounding_boxes(pil_image, results[0]['boxes'], output_path="output_image_with_boxes.png", labels=results[0]['labels']) 
     fname = text.replace(" ", "_").replace(".", "")
-    image_with_boxes.save("detected_"+fname+".jpg", quality=90) 
+    #image_with_boxes.save("detected_"+fname+".jpg", quality=90) 
     return results
 
 

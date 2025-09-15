@@ -156,8 +156,8 @@ def follow_instructions(
     ):
 
     # convert instructions to program
-    pprint_curr_loc = f"({curr_position[0]:.1f}, {curr_position[1]:.1f})"
-    pprint_room_limits = f"(({MIN_X:.1f}, {MIN_Y:.1f}), ({MAX_X:.1f}, {MAX_Y:.1f}))"
+    #pprint_curr_loc = f"({curr_position[0]:.1f}, {curr_position[1]:.1f})"
+    #pprint_room_limits = f"(({MIN_X:.1f}, {MIN_Y:.1f}), ({MAX_X:.1f}, {MAX_Y:.1f}))"
     filled_prompt = instruction_following_prompt4.format(challenge_question=challenge_question)
     n_pts = -1 # num of smoothed pts
 
@@ -262,10 +262,9 @@ def follow_instructions(
 
             pos = red_path_b[-1]
         elif (instr_name == "avoid_between"):
-            # add obstacles to counts
+            # areas to avoid
 
             # locate objects in image                                                                                                          
-            import pdb; pbd.set_trace()
             image_text1 = instr_args[0].replace("_", " ") + "."
             image_text2 = instr_args[1].replace("_", " ") + "."
             obj_det_res1 = apply_dino(self, image, image_text1, obj_detection_model, obj_detection_processor, text_thresh=0.2, box_thresh=0.2)
@@ -325,15 +324,19 @@ def question_processor_driver(self):
         print(f"An error occurred: {e}")  # TODO sometimes an error here; fix
 
 
-    cross_referenced_obj_list = cross_reference(gdf, self.challenge_question)
+    cross_referenced_obj_list = [] if self.statement_type == 'instruction-following' else cross_reference(gdf, self.challenge_question)
+
     # create bounding box
-    room_limits = gdf.total_bounds
-
+    #room_limits = gdf.total_bounds
+    
     gdf = gdf.loc[gdf.object_name.isin(cross_referenced_obj_list), :]
-
     object_coord_center_list = create_object_center_list(gdf)
-    gdf['center'] = gdf.geometry
-    gdf['geometry'] = gdf.apply(lambda x: create_bbox(x['geometry'], x['scale']), axis=1)
+
+    try:
+        gdf['center'] = gdf.geometry
+        gdf['geometry'] = gdf.apply(lambda x: create_bbox(x['geometry'], x['scale']), axis=1)
+    except Exception as e:
+        print(f"Error: {e}")
 
     # create obstacle list for prompt
     object_coord_list = create_object_list(gdf)

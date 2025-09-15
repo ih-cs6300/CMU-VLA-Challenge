@@ -115,6 +115,7 @@ class RobotProcessor:
         self.odom_id_pointer = -1
         self.image_id_pointer = 0
         self.camera_offset_z = rospy.get_param("~cameraOffsetZ", 0.0)
+        self.user = os.getenv('USER')
 
 
         # object detection
@@ -204,7 +205,7 @@ class RobotProcessor:
             if point_matrix.shape[0] > 0:
                 #rospy.loginfo("\nFirst 5 points (or fewer if less than 5):")
                 #rospy.loginfo(point_matrix[:min(5, point_matrix.shape[0])])
-                np.save('/home/ubuntu/CMU-VLA-Challenge/occ_grid99.npy', point_matrix)
+                #np.save(f'/home/{self.user}/CMU-VLA-Challenge/occ_grid99.npy', point_matrix)
 
                 # store point matrix
                 self.point_matrix = point_matrix
@@ -389,11 +390,13 @@ class RobotProcessor:
 
         # Generate a unique filename using timestamp
         #filename = os.path.join(self.output_directory, f"image_{timestamp}_{self.image_count:04d}.png")
-        filename = "/home/ubuntu/CMU-VLA-Challenge/camera_image1.png"
+        filename = f"/home/{self.user}/CMU-VLA-Challenge/camera_image1.png"
 
         try:
             # Save the OpenCV image as a PNG file
-            cv2.imwrite(filename, self.image)
+            #cv2.imwrite(filename, self.image)
+
+            pass
             #rospy.loginfo(f"Saved image: {filename}")
         except Exception as e:
             rospy.logerr(f"Error saving image {filename}: {e}")
@@ -415,7 +418,7 @@ class RobotProcessor:
             self.pt2img_dist_lut = pt2img_lut
 
 
-        #np.save('/home/ubuntu/CMU-VLA-Challenge/regscan_grid.npy', self.lidar_cloud)
+        #np.save(f'/home/{self.user}/CMU-VLA-Challenge/regscan_grid.npy', self.lidar_cloud)
 
     def save_gdf(self):
         self.gdf.to_pickle('gpandas_df.pkl')        
@@ -433,15 +436,16 @@ class RobotProcessor:
                 get_qtype_objects(self, self.challenge_question)
 
             if ((self.got_position == True) and (self.got_traversable == True) and (self.got_question == True) and (self.statement_type != "") and 
-                (self.got_image == True) and (self.got_lidar == True) and (self.obj_detection_model is not None)): 
-                print(f"\nstate: {self.state_names[self.state]}")
+                (self.got_image == True) and (self.got_lidar == True) and (self.obj_detection_model is not None)):  
                 if self.statement_type == 'numerical' or self.statement_type == 'object-reference':
                     self.state = 1 
+                    print(f"\nstate: {self.state_names[self.state]}")
                     self._explore1()
                 else:
-                    get_qtype_objects(self, self.challenge_question)
-                    self._process_question()  # no exploration
+                    get_qtype_objects(self, self.challenge_question) 
                     self.state = 2  # skip process question
+                    print(f"\nstate: {self.state_names[self.state]}")
+                    self._process_question()  # no exploration
         elif (self.state == 1):
             # explore
             if (self.done_exploring == True) and (self.got_question == True): 
