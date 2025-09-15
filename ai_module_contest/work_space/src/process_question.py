@@ -49,7 +49,8 @@ def extract_objects(msg, statement_type):
     """
     filled_prompt = object_extraction_prompt.format(challenge_question=msg)
     #ans, resp = ask_openai(filled_prompt, statement_type)
-    ans, response_str = ask_gemini(filled_prompt, None, statement_type)
+    print(f"  ask: llm obj/extraction-qtype")
+    ans, response_str = ask_gemini(filled_prompt, None, statement_type) 
     return ans
 
 
@@ -100,6 +101,7 @@ def cross_reference(gdf, challenge_question):
         room_objects=room_objects_str,
         instr=challenge_question
     )
+    print("   ask: llm object cross reference")
     ans, response_str = ask_gemini(filled_prompt, None, 'cross-reference')
     print("cross ref\n")
     print(filled_prompt)
@@ -160,6 +162,7 @@ def follow_instructions(
     n_pts = -1 # num of smoothed pts
 
     #ans, response_str = ask_openai(filled_prompt, 'target-coordinates')
+    print("  ask: llm instr-to-prog")
     ans, response_str = ask_gemini(filled_prompt, None, statement_type)
 
     print(filled_prompt)
@@ -261,7 +264,8 @@ def follow_instructions(
         elif (instr_name == "avoid_between"):
             # add obstacles to counts
 
-            # locate objects in image                                                                                                           
+            # locate objects in image                                                                                                          
+            import pdb; pbd.set_trace()
             image_text1 = instr_args[0].replace("_", " ") + "."
             image_text2 = instr_args[1].replace("_", " ") + "."
             obj_det_res1 = apply_dino(self, image, image_text1, obj_detection_model, obj_detection_processor, text_thresh=0.2, box_thresh=0.2)
@@ -283,12 +287,13 @@ def follow_instructions(
 
 def get_qtype_objects(self, challenge_question):
     # get objects of interest from challenge_question
-    obj_dict = extract_objects(challenge_question, 'object-extraction')
-    statement_type = obj_dict['statment-type']
+    if (self.statement_type == ""):
+        obj_dict = extract_objects(challenge_question, 'object-extraction')
+        statement_type = obj_dict['statment-type']
 
-    self.statement_type = statement_type
-    self.question_objects = [*obj_dict['objects']]
-    self.obj_dict = obj_dict
+        self.statement_type = statement_type
+        self.question_objects = [*obj_dict['objects']]
+        self.obj_dict = obj_dict
 
     
 
@@ -338,6 +343,7 @@ def question_processor_driver(self):
        filled_prompt = numerical_prompt.format(obs=json.dumps(object_coord_list), challenge_question=challenge_question)
        print(filled_prompt)
        #ans, response_str = ask_openai(filled_prompt, statement_type)
+       print("  ask: llm numerical question")
        ans, response_str = ask_gemini(filled_prompt, None, statement_type)
        print(f"\n\nanswer: {ans['answer']}\n\n")
        self.answer = ans['answer']
@@ -345,6 +351,7 @@ def question_processor_driver(self):
        filled_prompt = object_reference_prompt.format(obs=json.dumps(object_coord_list), challenge_question=challenge_question)
        print(filled_prompt)
        #ans, response_str = ask_openai(filled_prompt, statement_type)
+       print("  ask:  llm obj-ref-question")
        ans, response_str = ask_gemini(filled_prompt, None, statement_type)
        obj_name = next(iter(ans))
        ans[obj_name] = [tuple(x) for x in ans[obj_name]]   # convert bbox corners from list to tuples

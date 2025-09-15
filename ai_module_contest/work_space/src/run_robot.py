@@ -47,6 +47,8 @@ class RobotProcessor:
         """
         Initializes the RobotProcessor node, setting up the subscriber.
         """ 
+        rospy.init_node('robo_processor_node', anonymous=True)
+        #rospy.loginfo("RobotProcessor node initialized.")
 
         self.waypoint_pub = rospy.Publisher('/way_point_with_heading', Pose2D, queue_size=1000)
         self.numerical_pub = rospy.Publisher('/numerical_response', Int32, queue_size=10)
@@ -121,9 +123,7 @@ class RobotProcessor:
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.obj_detection_processor = AutoProcessor.from_pretrained(model_id)
         self.obj_detection_model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(self.device)
-
-        rospy.init_node('robo_processor_node', anonymous=True)
-        #rospy.loginfo("RobotProcessor node initialized.")
+ 
                                                                                                 
         # Subscribe to the 'traversable_area' topic
         self.trav_subscr = rospy.Subscriber(
@@ -175,8 +175,7 @@ class RobotProcessor:
 
         if (self.got_question == False) and (msg.data is not None):
             self.challenge_question = msg.data
-            self.got_question = True
-            get_qtype_objects(self, self.challenge_question)
+            self.got_question = True 
 
     def _process_question(self):
         question_processor_driver(self)
@@ -423,21 +422,24 @@ class RobotProcessor:
 
     def state_controller(self, event):
         # state controller 
-
+      
         if (self.state == 0):
             # init
             if (self.state != self.old_state):
                 print(f"\nstate: {self.state_names[self.state]}")
                 self.old_state = self.state
 
+            if self.statement_type == "":
+                get_qtype_objects(self, self.challenge_question)
+
             if ((self.got_position == True) and (self.got_traversable == True) and (self.got_question == True) and (self.statement_type != "") and 
                 (self.got_image == True) and (self.got_lidar == True) and (self.obj_detection_model is not None)): 
-                self.state = 1
                 print(f"\nstate: {self.state_names[self.state]}")
-                if self.statement_type != 'instruction-following':
+                if self.statement_type == 'numerical' or self.statement_type == 'object-reference':
+                    self.state = 1 
                     self._explore1()
                 else:
-                    #self._explore2()
+                    get_qtype_objects(self, self.challenge_question)
                     self._process_question()  # no exploration
                     self.state = 2  # skip process question
         elif (self.state == 1):
@@ -445,7 +447,7 @@ class RobotProcessor:
             if (self.done_exploring == True) and (self.got_question == True): 
                 self.state = 2
                 print(f"\nstate: {self.state_names[self.state]}")
-                self.unsubscribe_markers();
+                #self.unsubscribe_markers();
                 self._process_question()
         elif (self.state == 2):
             # process question
