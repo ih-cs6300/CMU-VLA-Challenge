@@ -109,7 +109,7 @@ class RobotProcessor:
         self.got_position = False
         self.got_traversable = False
         self.got_question = False
-        self.done_exploring = True # TODO False 
+        self.done_exploring = False 
         self.got_answer = False
 
         # robot state
