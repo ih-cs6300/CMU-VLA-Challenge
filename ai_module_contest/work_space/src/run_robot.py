@@ -462,10 +462,12 @@ class RobotProcessor:
             # answer question
             if (self.statement_type == 'numerical'):
                 print(f"answer: {self.answer}")
+                publish_numerical(self, self.answer, self.numerical_pub)
                 self.state = 4
                 print(f"\nstate: {self.state_names[self.state]}")
             elif (self.statement_type == 'object-reference'):
                 print(f"answer: {self.answer}")
+                publish_marker(self, self.answer, self.marker_pub)
                 self.state = 4
                 print(f"\nstate: {self.state_names[self.state]}")
             elif (self.statement_type == 'instruction-following'):

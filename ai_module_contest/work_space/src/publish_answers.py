@@ -34,19 +34,20 @@ def publish_numerical(self, num_answer, publisher):
 
 
 def publish_marker(self, marker_answer, publisher):
+    marker_answer = self.gdf.loc[self.gdf.geometry == marker_answer, :].iloc[0]
     # Create a Marker message
     marker = Marker()
     marker.header.frame_id = "map"  # Reference frame
     marker.header.stamp = rospy.Time.now()
-    marker.ns = marker_answer['name']
+    marker.ns = marker_answer['object_name']
     marker.id = 0
     marker.type = 1 # Assuming a cube for bounding box
     marker.action = 0
 
     # Set the position of the marker
-    marker.pose.position.x = marker_answer['position'].x
-    marker.pose.position.y = marker_answer['position'].y
-    marker.pose.position.z = marker_answer['position'].z
+    marker.pose.position.x = marker_answer['geometry'].x
+    marker.pose.position.y = marker_answer['geometry'].y
+    marker.pose.position.z = marker_answer['geometry'].z
     marker.pose.orientation.x = 0.0
     marker.pose.orientation.y = 0.0
     marker.pose.orientation.z = 0.0
